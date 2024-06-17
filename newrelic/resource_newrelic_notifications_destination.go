@@ -54,7 +54,7 @@ func resourceNewRelicNotificationDestination() *schema.Resource {
 				Type:          schema.TypeList,
 				Optional:      true,
 				MaxItems:      1,
-				ConflictsWith: []string{"auth_token"},
+				ConflictsWith: []string{"auth_token", "auth_custom_header"},
 				Description:   "Basic username and password authentication credentials.",
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
@@ -74,7 +74,7 @@ func resourceNewRelicNotificationDestination() *schema.Resource {
 				Type:          schema.TypeList,
 				Optional:      true,
 				MaxItems:      1,
-				ConflictsWith: []string{"auth_basic"},
+				ConflictsWith: []string{"auth_basic", "auth_custom_header"},
 				Description:   "Token authentication credentials.",
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
@@ -83,6 +83,25 @@ func resourceNewRelicNotificationDestination() *schema.Resource {
 							Optional: true,
 						},
 						"token": {
+							Type:      schema.TypeString,
+							Required:  true,
+							Sensitive: true,
+						},
+					},
+				},
+			},
+			"auth_custom_header": {
+				Type:          schema.TypeList,
+				Optional:      true,
+				ConflictsWith: []string{"auth_basic", "auth_token"},
+				Description:   "Custom header based authentication",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"key": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"value": {
 							Type:      schema.TypeString,
 							Required:  true,
 							Sensitive: true,
@@ -107,6 +126,30 @@ func resourceNewRelicNotificationDestination() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "The last time a notification was sent.",
+			},
+			"guid": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Destination entity GUID",
+			},
+			"secure_url": {
+				Type:        schema.TypeList,
+				Optional:    true,
+				MaxItems:    1,
+				Description: "URL in secure format",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"prefix": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
+						"secure_suffix": {
+							Type:      schema.TypeString,
+							Required:  true,
+							Sensitive: true,
+						},
+					},
+				},
 			},
 		},
 		SchemaVersion: 1,
@@ -305,6 +348,12 @@ func resourceNewRelicNotificationDestinationUpdate(ctx context.Context, d *schem
 	destinationInput, err := expandNotificationDestinationUpdate(d)
 	if err != nil {
 		return diag.FromErr(err)
+	}
+
+	destinationType := notifications.AiNotificationsDestinationType(d.Get("type").(string))
+
+	if isOAuth2SlackType(destinationType) {
+		return diag.FromErr(fmt.Errorf("a destination with '%s' type cannot be updated via terraform", destinationType))
 	}
 
 	providerConfig := meta.(*ProviderConfig)

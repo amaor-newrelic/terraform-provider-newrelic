@@ -24,6 +24,11 @@ func dataSourceNewRelicNotificationDestination() *schema.Resource {
 				ExactlyOneOf: []string{"id", "name"},
 				Description:  "The ID of the destination.",
 			},
+			"guid": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "Destination entity GUID",
+			},
 			"name": {
 				Type:         schema.TypeString,
 				Optional:     true,
@@ -56,6 +61,20 @@ func dataSourceNewRelicNotificationDestination() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "The status of the destination.",
+			},
+			"secure_url": {
+				Type:        schema.TypeSet,
+				Computed:    true,
+				Optional:    true,
+				Description: "URL in secure format",
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"prefix": {
+							Type:     schema.TypeString,
+							Required: true,
+						},
+					},
+				},
 			},
 		},
 	}

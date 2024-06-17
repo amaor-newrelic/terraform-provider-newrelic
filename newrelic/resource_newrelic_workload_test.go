@@ -83,6 +83,18 @@ func TestAccNewRelicWorkload_EntitySearchQueriesOnly(t *testing.T) {
 		CheckDestroy: testAccCheckNewRelicWorkloadDestroy,
 		Steps: []resource.TestStep{
 			{
+				Config:      testAccNewRelicWorkloadConfigWrongEntitySearchQueriesOnly(rName, ""),
+				ExpectError: regexp.MustCompile("Invalid expression"),
+			},
+			{
+				Config:      testAccNewRelicWorkloadConfigWrongEntitySearchQueriesOnly(rName, "\"\""),
+				ExpectError: regexp.MustCompile("expected \"entity_search_query.0.query\" to not be an empty string"),
+			},
+			{
+				Config:      testAccNewRelicWorkloadConfigWrongEntitySearchQueriesOnly(rName, "\"     \""),
+				ExpectError: regexp.MustCompile("expected \"entity_search_query.0.query\" to not be an empty string or whitespace"),
+			},
+			{
 				Config: testAccNewRelicWorkloadConfigEntitySearchQueriesOnly(rName),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckNewRelicWorkloadExists(resourceName),
@@ -546,6 +558,19 @@ resource "newrelic_workload" "foo" {
 	}
 }
 `, testAccountID, name)
+}
+
+func testAccNewRelicWorkloadConfigWrongEntitySearchQueriesOnly(name string, esq string) string {
+	return fmt.Sprintf(`
+resource "newrelic_workload" "foo" {
+	name = "%[2]s"
+	account_id = %[1]d
+
+	entity_search_query {
+		query = %[3]s
+	}
+}
+`, testAccountID, name, esq)
 }
 
 func testAccNewRelicWorkloadConfigEntityMultiSearchQueriesOnly(name string) string {

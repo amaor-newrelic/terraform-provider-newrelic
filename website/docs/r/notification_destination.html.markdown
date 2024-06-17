@@ -19,14 +19,19 @@ resource "newrelic_notification_destination" "foo" {
   name = "foo"
   type = "WEBHOOK"
 
-  property {
-    key = "url"
-    value = "https://webhook.mywebhook.com"
+  secure_url {
+    prefix = "https://webhook.mywebhook.com/"
+    secure_suffix = "service_id/123456"
   }
 
-  auth_basic {
-    user = "username"
-    password = "password"
+  property {
+    key = "source"
+    value = "terraform"
+  }
+
+  auth_custom_header {
+    key = "API_KEY"
+    value = "test-api-key"
   }
 }
 ```
@@ -41,6 +46,8 @@ The following arguments are supported:
 * `type` - (Required) The type of destination.  One of: `EMAIL`, `SERVICE_NOW`, `WEBHOOK`, `JIRA`, `MOBILE_PUSH`, `EVENT_BRIDGE`, `PAGERDUTY_ACCOUNT_INTEGRATION` or `PAGERDUTY_SERVICE_INTEGRATION`. The types `SLACK` and `SLACK_COLLABORATION` can only be imported, updated and destroyed (cannot be created via terraform).
 * `auth_basic` - (Optional) A nested block that describes a basic username and password authentication credentials. Only one auth_basic block is permitted per notification destination definition.  See [Nested auth_basic blocks](#nested-auth_basic-blocks) below for details.
 * `auth_token` - (Optional) A nested block that describes a token authentication credentials. Only one auth_token block is permitted per notification destination definition.  See [Nested auth_token blocks](#nested-auth_token-blocks) below for details.
+* `auth_custom_header` - (Optional) A nested block that describes a custom header authentication credentials. Multiple blocks are permitted per notification destination definition. [Nested auth_custom_header blocks](#nested-authcustomheader-blocks) below for details.
+* `secure_url` - (Optional) A nested block that describes a URL that contains sensitive data at the path or parameters. Only one secure_url block is permitted per notification destination definition. See [Nested secure_url blocks](#nested-secureurl-blocks) below for details.
 * `property` - (Required) A nested block that describes a notification destination property. See [Nested property blocks](#nested-property-blocks) below for details.
 
 ### Nested `auth_basic` blocks
@@ -53,7 +60,17 @@ The following arguments are supported:
 * `prefix` - (Required) The prefix of the token auth.
 * `token` - (Required) Specifies the token for integrating.
 
+### Nested `auth_custom_header` blocks
+
+* `key` - (Required) The key of the header.
+* `value` - (Required) The secret value of the header.
+
 ~> **NOTE:** OAuth2 authentication type is not available via terraform for notifications destinations.
+
+### Nested `secure_url` blocks
+
+* `prefix` - (Required) The prefix of the URL.
+* `secure_suffix` - (Required) The suffix of the URL, which contains sensitive data.
 
 ### Nested `property` blocks
 
@@ -86,6 +103,7 @@ Each notification destination type supports a specific set of arguments for the 
 In addition to all arguments above, the following attributes are exported:
 
 * `id` - The ID of the destination.
+* `guid` - The unique entity identifier of the destination in New Relic.
 
 ## Additional Examples
 
@@ -161,7 +179,7 @@ resource "newrelic_notification_destination" "foo" {
     key = ""
     value = ""
   }
-  
+
   auth_token {
     prefix = "Token token="
     token  = "10567a689d984d03c021034b22a789e2"
@@ -223,34 +241,40 @@ resource "newrelic_notification_destination" "foo" {
 
 #### [Slack](https://docs.newrelic.com/docs/alerts-applied-intelligence/notifications/notification-integrations/#slack)
 
-Slack destinations are created by actively interacting with the UI. This is how OAuth authentication works and there is no way to authenticate otherwise. Because of this, there is no way to create a slack destination via terraform, and must be created in the UI and imported into terraform.
+In order to create a Slack destination, you have to grant our application access to your workspace. This process is [based on OAuth](https://api.slack.com/authentication/oauth-v2) and can only be done through a browser.
+As a result, you cannot set up a Slack destination purely with Terraform code.
+However, if you would like to use Slack-based destinations with other resources in the New Relic Terraform Provider, the [data source `newrelic_notification_destination`](https://registry.terraform.io/providers/newrelic/newrelic/latest/docs/data-sources/notification_destination) may be used to fetch the ID of the destination; alternatively, you might want to source the ID of the destination from  NerdGraph, or from the New Relic One UI.
 
-##### Import Slack Destination
-1. Add an empty resource to your terraform file: 
+## Import
+
+~> **WARNING:** Slack-based destinations can only be imported and destroyed; this resource **does not** support creating and updating Slack-based destinations, owing to the reasons stated above, under the **Slack** section.
+
+Destination id can be found in the Destinations page -> three dots at the right of the chosen destination -> copy destination id to clipboard.
+This example is especially useful for slack destinations which *must* be imported.
+
+1. Add an empty resource to your terraform file:
 ```terraform
 resource "newrelic_notification_destination" "foo" {
 }
 ```
 2. Run import command: `terraform import newrelic_notification_destination.foo <destination_id>`
-3. Run the following command after the import successfully done and copy the information to your Slack resource:
-`terraform state show newrelic_notification_destination.foo`
-4. Add `ignore_changes` attribute on `auth_token` in your imported resource:
+3. Run the following command after the import successfully done and copy the information to your resource:
+   `terraform state show newrelic_notification_destination.foo`
+4. Add `ignore_changes` attribute on `all` in your imported resource:
 ```terraform
 lifecycle {
-    ignore_changes = [auth_token]
+    ignore_changes = all
   }
 ```
 
-Your imported Slack destination should look like that:
+Your imported destination should look like that:
 ```terraform
 resource "newrelic_notification_destination" "foo" {
   lifecycle {
-    ignore_changes = [auth_token]
+    ignore_changes = all
   }
-
   name = "*********"
   type = "SLACK"
-
   auth_token {
     prefix = "Bearer"
   }
@@ -263,9 +287,15 @@ resource "newrelic_notification_destination" "foo" {
 }
 ```
 
-
 ~> **NOTE:** Sensitive data such as destination API keys, service keys, auth object etc. are not returned from the underlying API for security reasons and may not be set in state when importing.
 
 ## Additional Information
 More information about destinations integrations can be found in NewRelic [documentation](https://docs.newrelic.com/docs/alerts-applied-intelligence/notifications/notification-integrations/).
 More details about the destinations API can be found [here](https://docs.newrelic.com/docs/apis/nerdgraph/examples/nerdgraph-api-notifications-destinations).
+
+### Moving from Legacy Alert Channels to Notification Channels
+As stated in the documentation of this resource and [`newrelic_notification_channel`](https://registry.terraform.io/providers/newrelic/newrelic/latest/docs/resources/notification_channel), destinations, created using the resource [`newrelic_notification_destination`](https://registry.terraform.io/providers/newrelic/newrelic/latest/docs/resources/notification_destination) can be paired with [`newrelic_notification_channel`](https://registry.terraform.io/providers/newrelic/newrelic/latest/docs/resources/notification_channel) to set up channels. These resources combined, are an alternative to the legacy resource [`newrelic_alert_channel`](https://registry.terraform.io/providers/newrelic/newrelic/latest/docs/resources/alert_channel), which is **deprecated** and will be **removed in a future major release**, as stated in the documentation of the resource.
+
+If you're currently using `newrelic_alert_channel` to manage channels, we **strongly recommend** migrating to these notifications-based resources at the earliest.
+
+Please refer to the examples in this page, or [this example](https://registry.terraform.io/providers/newrelic/newrelic/latest/docs/guides/getting_started#add-a-notification-channel) for illustrations on setting up channels with these resources.

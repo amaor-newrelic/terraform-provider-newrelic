@@ -62,7 +62,7 @@ func resourceNewRelicSyntheticsCertCheckMonitor() *schema.Resource {
 			},
 			"status": {
 				Type:         schema.TypeString,
-				Description:  "The monitor status (i.e. ENABLED, MUTED, DISABLED). Note: The 'MUTED' status is now deprecated, and support for this value will soon be removed from the Terraform Provider in an upcoming release. It is highly recommended for users to refrain from using this value and shift to alternatives.",
+				Description:  "The monitor status (ENABLED or DISABLED).",
 				Required:     true,
 				ValidateFunc: validateSyntheticMonitorStatus,
 			},
@@ -98,6 +98,16 @@ func resourceNewRelicSyntheticsCertCheckMonitor() *schema.Resource {
 				Computed:    true,
 				Description: "The interval in minutes at which this monitor should run.",
 			},
+			"runtime_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The runtime type that the monitor will run.",
+			},
+			"runtime_type_version": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "The specific semver version of the runtime type.",
+			},
 		},
 	}
 }
@@ -109,10 +119,22 @@ func resourceNewRelicSyntheticsCertCheckMonitorCreate(ctx context.Context, d *sc
 
 	var diags diag.Diagnostics
 
-	monitorInput := buildSyntheticsCertCheckMonitorCreateInput(d)
+	monitorInput, monitorInputErr := buildSyntheticsCertCheckMonitorCreateInput(d)
+	if monitorInputErr != nil {
+		diag.FromErr(monitorInputErr)
+	}
+
 	resp, err := client.Synthetics.SyntheticsCreateCertCheckMonitorWithContext(ctx, accountID, monitorInput)
 	if err != nil {
 		diag.FromErr(err)
+	}
+
+	if resp == nil {
+		if err != nil {
+			return diag.FromErr(err)
+		}
+		return diag.FromErr(fmt.Errorf("no response received from NerdGraph: failed to create cert check monitor"))
+
 	}
 
 	if len(resp.Errors) > 0 {
@@ -130,6 +152,17 @@ func resourceNewRelicSyntheticsCertCheckMonitorCreate(ctx context.Context, d *sc
 	_ = d.Set("locations_public", resp.Monitor.Locations.Public)
 	_ = d.Set("locations_private", resp.Monitor.Locations.Private)
 	_ = d.Set("period_in_minutes", syntheticsMonitorPeriodInMinutesValueMap[resp.Monitor.Period])
+
+	respRuntimeType := resp.Monitor.Runtime.RuntimeType
+	respRuntimeTypeVersion := resp.Monitor.Runtime.RuntimeTypeVersion
+
+	if respRuntimeType != "" {
+		_ = d.Set("runtime_type", respRuntimeType)
+	}
+
+	if respRuntimeTypeVersion != "" {
+		_ = d.Set("runtime_type_version", respRuntimeTypeVersion)
+	}
 
 	err = setSyntheticsMonitorAttributes(d, map[string]string{
 		"domain": resp.Monitor.Domain,
@@ -180,6 +213,19 @@ func resourceNewRelicSyntheticsCertCheckMonitorRead(ctx context.Context, d *sche
 			"period": string(syntheticsMonitorPeriodValueMap[int(entity.GetPeriod())]),
 			"status": string(entity.MonitorSummary.Status),
 		})
+
+		runtimeType, runtimeTypeVersion := getRuntimeValuesFromEntityTags(entity.GetTags())
+		if runtimeType != "" && runtimeTypeVersion != "" {
+			_ = d.Set("runtime_type", runtimeType)
+			_ = d.Set("runtime_type_version", runtimeTypeVersion)
+		}
+
+		domain, daysUntilExpiration := getCertCheckMonitorValuesFromEntityTags(entity.GetTags())
+		if domain != "" && daysUntilExpiration != 0 {
+			_ = d.Set("domain", domain)
+			_ = d.Set("certificate_expiration", daysUntilExpiration)
+		}
+
 	}
 
 	return diag.FromErr(err)
@@ -192,7 +238,10 @@ func resourceNewRelicSyntheticsCertCheckMonitorUpdate(ctx context.Context, d *sc
 
 	var diags diag.Diagnostics
 
-	monitorInput := buildSyntheticsCertCheckMonitorUpdateInput(d)
+	monitorInput, err := buildSyntheticsCertCheckMonitorUpdateInput(d)
+	if err != nil {
+		diag.FromErr(err)
+	}
 	resp, err := client.Synthetics.SyntheticsUpdateCertCheckMonitorWithContext(ctx, guid, monitorInput)
 	if err != nil {
 		diag.FromErr(err)
@@ -210,6 +259,17 @@ func resourceNewRelicSyntheticsCertCheckMonitorUpdate(ctx context.Context, d *sc
 	_ = d.Set("locations_public", resp.Monitor.Locations.Public)
 	_ = d.Set("locations_private", resp.Monitor.Locations.Private)
 	_ = d.Set("period_in_minutes", syntheticsMonitorPeriodInMinutesValueMap[resp.Monitor.Period])
+
+	respRuntimeType := resp.Monitor.Runtime.RuntimeType
+	respRuntimeTypeVersion := resp.Monitor.Runtime.RuntimeTypeVersion
+
+	if respRuntimeType != "" {
+		_ = d.Set("runtime_type", respRuntimeType)
+	}
+
+	if respRuntimeTypeVersion != "" {
+		_ = d.Set("runtime_type_version", respRuntimeTypeVersion)
+	}
 
 	err = setSyntheticsMonitorAttributes(d, map[string]string{
 		"domain": resp.Monitor.Domain,
@@ -242,7 +302,7 @@ func resourceNewRelicSyntheticsCertCheckMonitorDelete(ctx context.Context, d *sc
 	return nil
 }
 
-func buildSyntheticsCertCheckMonitorCreateInput(d *schema.ResourceData) (result synthetics.SyntheticsCreateCertCheckMonitorInput) {
+func buildSyntheticsCertCheckMonitorCreateInput(d *schema.ResourceData) (result synthetics.SyntheticsCreateCertCheckMonitorInput, err error) {
 	inputBase := expandSyntheticsMonitorBase(d)
 
 	input := synthetics.SyntheticsCreateCertCheckMonitorInput{
@@ -267,10 +327,32 @@ func buildSyntheticsCertCheckMonitorCreateInput(d *schema.ResourceData) (result 
 		input.NumberDaysToFailBeforeCertExpires = v.(int)
 	}
 
-	return input
+	runtimeType, runtimeTypeOk := d.GetOk("runtime_type")
+	runtimeTypeVersion, runtimeTypeVersionOk := d.GetOk("runtime_type_version")
+
+	if runtimeTypeOk || runtimeTypeVersionOk {
+		if !(runtimeTypeOk && runtimeTypeVersionOk) {
+			return input, fmt.Errorf("both `runtime_type` and `runtime_type_version` are to be specified")
+		}
+		r := synthetics.SyntheticsExtendedTypeMonitorRuntimeInput{
+			RuntimeType:        runtimeType.(string),
+			RuntimeTypeVersion: synthetics.SemVer(runtimeTypeVersion.(string)),
+		}
+		input.Runtime = &r
+
+	} else {
+		r := synthetics.SyntheticsExtendedTypeMonitorRuntimeInput{}
+		input.Runtime = &r
+	}
+
+	if v, ok := d.GetOk("certificate_expiration"); ok {
+		input.NumberDaysToFailBeforeCertExpires = v.(int)
+	}
+
+	return input, nil
 }
 
-func buildSyntheticsCertCheckMonitorUpdateInput(d *schema.ResourceData) (result synthetics.SyntheticsUpdateCertCheckMonitorInput) {
+func buildSyntheticsCertCheckMonitorUpdateInput(d *schema.ResourceData) (result synthetics.SyntheticsUpdateCertCheckMonitorInput, err error) {
 	inputBase := expandSyntheticsMonitorBase(d)
 
 	input := synthetics.SyntheticsUpdateCertCheckMonitorInput{
@@ -294,5 +376,28 @@ func buildSyntheticsCertCheckMonitorUpdateInput(d *schema.ResourceData) (result 
 	if v, ok := d.GetOk("certificate_expiration"); ok {
 		input.NumberDaysToFailBeforeCertExpires = v.(int)
 	}
-	return input
+
+	runtimeType, runtimeTypeOk := d.GetOk("runtime_type")
+	runtimeTypeVersion, runtimeTypeVersionOk := d.GetOk("runtime_type_version")
+
+	if runtimeTypeOk || runtimeTypeVersionOk {
+		if !(runtimeTypeOk && runtimeTypeVersionOk) {
+			return input, fmt.Errorf("both `runtime_type` and `runtime_type_version` are to be specified")
+		}
+		r := synthetics.SyntheticsExtendedTypeMonitorRuntimeInput{
+			RuntimeType:        runtimeType.(string),
+			RuntimeTypeVersion: synthetics.SemVer(runtimeTypeVersion.(string)),
+		}
+		input.Runtime = &r
+
+	} else {
+		r := synthetics.SyntheticsExtendedTypeMonitorRuntimeInput{}
+		input.Runtime = &r
+	}
+
+	if v, ok := d.GetOk("certificate_expiration"); ok {
+		input.NumberDaysToFailBeforeCertExpires = v.(int)
+	}
+
+	return input, nil
 }
